@@ -1,0 +1,229 @@
+# ---------------------------- AlumnoApp MySQL - CON THREADING ----------------------------
+
+import sys
+import threading
+from PyQt6.QtWidgets import (
+    QApplication, QWidget, QVBoxLayout, QHBoxLayout, QPushButton,
+    QLineEdit, QTableWidget, QTableWidgetItem, QLabel, QMessageBox, QHeaderView
+)
+from PyQt6.QtCore import QTimer, pyqtSignal, QObject
+import mysql.connector
+from mysql.connector import Error
+
+# ---------------------------- CONFIGURACIÓN ----------------------------
+DB_CONFIG = {
+    "host": "192.168.100.165",
+    "user": "root",
+    "password": "root",
+    "database": "alumno",
+    "port": 3306,
+    "connect_timeout": 5
+}
+
+def get_connection():
+    """Devuelve una conexión a la base de datos"""
+    return mysql.connector.connect(**DB_CONFIG)
+
+# ---------------------------- SEÑALES PARA THREADING ----------------------------
+class WorkerSignals(QObject):
+    """Señales para comunicar el thread con la UI"""
+    finished = pyqtSignal(object)  # Envía el resultado
+    error = pyqtSignal(str)  # Envía el error
+
+# ---------------------------- INTERFAZ PRINCIPAL ----------------------------
+class AlumnoApp(QWidget):
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle("AlumnoApp – Gestión de Estudiantes")
+        self.setMinimumWidth(700)
+        self.setMinimumHeight(500)
+        self.init_ui()
+        
+        # Cargar datos al inicio
+        self.load_data()
+
+        # Timer para refresco automático cada 3 segundos
+        self.timer = QTimer()
+        self.timer.timeout.connect(self.load_data)
+        self.timer.start(3000)
+
+    # ---------------------------- UI ----------------------------
+    def init_ui(self):
+        layout = QVBoxLayout()
+
+        # Título
+        titulo = QLabel("🎓 Sistema de Gestión de Estudiantes")
+        titulo.setStyleSheet("font-size: 18px; font-weight: bold; padding: 10px;")
+        layout.addWidget(titulo)
+
+        # Mensaje de estado
+        self.status_label = QLabel("⏳ Cargando datos...")
+        self.status_label.setStyleSheet("padding: 5px; background-color: #f0f0f0; border-radius: 3px;")
+        layout.addWidget(self.status_label)
+
+        # Tabla de alumnos
+        self.table = QTableWidget()
+        self.table.setColumnCount(3)
+        self.table.setHorizontalHeaderLabels(["ID", "Nombre", "Edad"])
+        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        self.table.setAlternatingRowColors(True)
+        layout.addWidget(self.table)
+
+        # Campos de entrada
+        form = QHBoxLayout()
+        
+        self.nombre_input = QLineEdit()
+        self.nombre_input.setPlaceholderText("Nombre del estudiante")
+        form.addWidget(QLabel("Nombre:"))
+        form.addWidget(self.nombre_input)
+
+        self.edad_input = QLineEdit()
+        self.edad_input.setPlaceholderText("Edad")
+        form.addWidget(QLabel("Edad:"))
+        form.addWidget(self.edad_input)
+
+        layout.addLayout(form)
+
+        # Botones
+        botones = QHBoxLayout()
+        
+        btn_insert = QPushButton("➕ Insertar Estudiante")
+        btn_insert.clicked.connect(self.insertar_estudiante)
+        btn_insert.setStyleSheet("padding: 8px; background-color: #4CAF50; color: white; font-weight: bold;")
+        botones.addWidget(btn_insert)
+
+        btn_prueba = QPushButton("🧪 Insertar Prueba")
+        btn_prueba.clicked.connect(self.insertar_prueba)
+        btn_prueba.setStyleSheet("padding: 8px; background-color: #2196F3; color: white; font-weight: bold;")
+        botones.addWidget(btn_prueba)
+
+        btn_refresh = QPushButton("🔄 Refrescar")
+        btn_refresh.clicked.connect(self.load_data)
+        btn_refresh.setStyleSheet("padding: 8px;")
+        botones.addWidget(btn_refresh)
+
+        layout.addLayout(botones)
+        self.setLayout(layout)
+
+    # ---------------------------- CARGAR DATOS (CON THREADING) ----------------------------
+    def load_data(self):
+        """Carga los datos en un thread separado para no bloquear la UI"""
+        self.status_label.setText("⏳ Cargando datos...")
+        
+        def worker():
+            try:
+                db = get_connection()
+                cursor = db.cursor()
+                cursor.execute("SELECT * FROM estudiantes ORDER BY id")
+                rows = cursor.fetchall()
+                db.close()
+                return rows
+            except Error as e:
+                raise e
+
+        def on_success(rows):
+            self.status_label.setText(f"✅ Conectado | {len(rows)} estudiante(s)")
+            self.status_label.setStyleSheet("padding: 5px; background-color: #d4edda; border-radius: 3px;")
+
+            self.table.setRowCount(len(rows))
+            for row_idx, row in enumerate(rows):
+                for col_idx, value in enumerate(row):
+                    item = QTableWidgetItem(str(value))
+                    self.table.setItem(row_idx, col_idx, item)
+
+        def on_error(error):
+            print(f"❌ Error: {error}")
+            self.status_label.setText(f"❌ Error: {error}")
+            self.status_label.setStyleSheet("padding: 5px; background-color: #f8d7da; border-radius: 3px;")
+            self.table.setRowCount(0)
+
+        # Ejecutar en thread
+        self.run_in_thread(worker, on_success, on_error)
+
+    # ---------------------------- INSERTAR ESTUDIANTE ----------------------------
+    def insertar_estudiante(self):
+        """Inserta un estudiante con los datos del formulario"""
+        nombre = self.nombre_input.text().strip()
+        edad = self.edad_input.text().strip()
+
+        if not nombre:
+            QMessageBox.warning(self, "Campo vacío", "Por favor ingresa un nombre")
+            return
+
+        if not edad.isdigit():
+            QMessageBox.warning(self, "Edad inválida", "La edad debe ser un número")
+            return
+
+        self.status_label.setText("⏳ Insertando estudiante...")
+
+        def worker():
+            db = get_connection()
+            cursor = db.cursor()
+            cursor.execute("INSERT INTO estudiantes (nombre, edad) VALUES (%s, %s)", 
+                         (nombre, int(edad)))
+            db.commit()
+            db.close()
+            return True
+
+        def on_success(result):
+            print(f"✅ Estudiante insertado: {nombre}, {edad} años")
+            self.status_label.setText(f"✅ Estudiante '{nombre}' agregado")
+            self.nombre_input.clear()
+            self.edad_input.clear()
+            self.load_data()
+
+        def on_error(error):
+            print(f"❌ Error: {error}")
+            QMessageBox.critical(self, "Error", f"No se pudo insertar:\n{error}")
+            self.status_label.setText("❌ Error al insertar")
+
+        self.run_in_thread(worker, on_success, on_error)
+
+    # ---------------------------- INSERTAR PRUEBA ----------------------------
+    def insertar_prueba(self):
+        """Inserta un estudiante de prueba"""
+        self.status_label.setText("⏳ Insertando estudiante de prueba...")
+
+        def worker():
+            db = get_connection()
+            cursor = db.cursor()
+            cursor.execute("INSERT INTO estudiantes (nombre, edad) VALUES (%s, %s)", 
+                         ("Juan", 20))
+            db.commit()
+            db.close()
+            return True
+
+        def on_success(result):
+            print("✅ Estudiante de prueba insertado")
+            self.status_label.setText("✅ Estudiante de prueba insertado")
+            self.load_data()
+
+        def on_error(error):
+            print(f"❌ Error: {error}")
+            self.status_label.setText(f"❌ Error: {error}")
+
+        self.run_in_thread(worker, on_success, on_error)
+
+    # ---------------------------- EJECUTAR EN THREAD ----------------------------
+    def run_in_thread(self, worker_func, on_success, on_error):
+        """Ejecuta una función en un thread separado"""
+        signals = WorkerSignals()
+        signals.finished.connect(on_success)
+        signals.error.connect(on_error)
+
+        def run():
+            try:
+                result = worker_func()
+                signals.finished.emit(result)
+            except Exception as e:
+                signals.error.emit(str(e))
+
+        thread = threading.Thread(target=run, daemon=True)
+        thread.start()
+
+# ---------------------------- EJECUCIÓN ----------------------------
+if __name__ == "__main__":
+    app = QApplication(sys.argv)
+    window = AlumnoApp()
+    window.show()
+    sys.exit(app.exec())
