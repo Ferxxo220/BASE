@@ -1,0 +1,147 @@
+import tkinter as tk
+from tkinter import ttk, messagebox
+import mysql.connector
+
+# ---------------------------- CONFIGURACIÓN ----------------------------
+DB_CONFIG = {
+    "host": "192.168.100.165",  # IP del servidor (PC1)
+    "user": "fernando",
+    "password": "1234",
+    "database": "alumno",
+    "port": 3306
+}
+
+def get_connection():
+    """Devuelve una conexión a la base de datos"""
+    return mysql.connector.connect(**DB_CONFIG)
+
+# ---------------------------- INTERFAZ ----------------------------
+class AlumnoApp(tk.Tk):
+    def __init__(self):
+        super().__init__()
+        self.title("🎓 Gestión de Estudiantes")
+        self.geometry("650x450")
+        self.configure(bg="#f5f5f5")
+
+        # --- Tabla ---
+        self.tree = ttk.Treeview(self, columns=("ID", "Nombre", "Edad"), show="headings", height=12)
+        self.tree.heading("ID", text="ID")
+        self.tree.heading("Nombre", text="Nombre")
+        self.tree.heading("Edad", text="Edad")
+        self.tree.column("ID", width=50, anchor="center")
+        self.tree.column("Nombre", width=350)
+        self.tree.column("Edad", width=80, anchor="center")
+        self.tree.pack(pady=10, padx=10, fill="x")
+
+        # Scrollbar
+        scrollbar = ttk.Scrollbar(self, orient="vertical", command=self.tree.yview)
+        self.tree.configure(yscroll=scrollbar.set)
+        scrollbar.place(x=630, y=10, height=250)
+
+        # --- Formulario ---
+        form_frame = tk.Frame(self, bg="#f5f5f5")
+        form_frame.pack(pady=10)
+
+        tk.Label(form_frame, text="Nombre:", bg="#f5f5f5").grid(row=0, column=0, padx=5, pady=5, sticky="e")
+        self.nombre_entry = tk.Entry(form_frame, width=25)
+        self.nombre_entry.grid(row=0, column=1, padx=5, pady=5)
+
+        tk.Label(form_frame, text="Edad:", bg="#f5f5f5").grid(row=0, column=2, padx=5, pady=5, sticky="e")
+        self.edad_entry = tk.Entry(form_frame, width=5)
+        self.edad_entry.grid(row=0, column=3, padx=5, pady=5)
+
+        # --- Botones ---
+        btn_frame = tk.Frame(self, bg="#f5f5f5")
+        btn_frame.pack(pady=10)
+
+        tk.Button(btn_frame, text="➕ Insertar", bg="#4CAF50", fg="white", width=12, command=self.insertar).grid(row=0, column=0, padx=5)
+        tk.Button(btn_frame, text="❌ Eliminar", bg="#f44336", fg="white", width=12, command=self.eliminar).grid(row=0, column=1, padx=5)
+        tk.Button(btn_frame, text="🔄 Refrescar", bg="#2196F3", fg="white", width=12, command=self.load_data).grid(row=0, column=2, padx=5)
+
+        # --- Mensaje de estado ---
+        self.status_label = tk.Label(self, text="", bg="#f5f5f5", fg="green")
+        self.status_label.pack()
+
+        # --- Refresco automático ---
+        self.after(0, self.load_data)
+        self.after(3000, self.refrescar)
+
+    # ---------------------------- FUNCIONES ----------------------------
+    def load_data(self):
+        """Carga los datos del servidor en la tabla"""
+        try:
+            db = get_connection()
+            cursor = db.cursor()
+            cursor.execute("SELECT * FROM estudiantes ORDER BY id")
+            rows = cursor.fetchall()
+            db.close()
+
+            # Limpiar tabla
+            for item in self.tree.get_children():
+                self.tree.delete(item)
+
+            # Insertar datos
+            for row in rows:
+                self.tree.insert("", "end", values=row)
+
+            self.status_label.config(text=f"✅ Conectado | {len(rows)} estudiante(s)", fg="green")
+        except mysql.connector.Error as e:
+            self.status_label.config(text=f"❌ Error: {e}", fg="red")
+            print(f"Error al conectar a MySQL: {e}")
+
+    def refrescar(self):
+        self.load_data()
+        self.after(3000, self.refrescar)
+
+    def insertar(self):
+        """Inserta un estudiante en el servidor"""
+        nombre = self.nombre_entry.get().strip()
+        edad = self.edad_entry.get().strip()
+
+        if not nombre:
+            messagebox.showwarning("Campo vacío", "Ingresa un nombre")
+            return
+        if not edad.isdigit():
+            messagebox.showwarning("Edad inválida", "Edad debe ser un número")
+            return
+
+        try:
+            db = get_connection()
+            cursor = db.cursor()
+            cursor.execute("INSERT INTO estudiantes (nombre, edad) VALUES (%s, %s)", (nombre, int(edad)))
+            db.commit()
+            db.close()
+
+            self.nombre_entry.delete(0, tk.END)
+            self.edad_entry.delete(0, tk.END)
+            self.load_data()
+        except mysql.connector.Error as e:
+            messagebox.showerror("Error", f"No se pudo insertar: {e}")
+
+    def eliminar(self):
+        """Elimina los registros seleccionados"""
+        selected = self.tree.selection()
+        if not selected:
+            messagebox.showwarning("Selecciona un registro", "Selecciona un estudiante para eliminar")
+            return
+
+        confirm = messagebox.askyesno("Confirmar", "¿Eliminar el estudiante seleccionado?")
+        if not confirm:
+            return
+
+        try:
+            db = get_connection()
+            cursor = db.cursor()
+            for item in selected:
+                id_value = self.tree.item(item, "values")[0]
+                cursor.execute("DELETE FROM estudiantes WHERE id=%s", (id_value,))
+            db.commit()
+            db.close()
+            self.load_data()
+        except mysql.connector.Error as e:
+            messagebox.showerror("Error", f"No se pudo eliminar: {e}")
+
+# ---------------------------- EJECUCIÓN ----------------------------
+if __name__ == "__main__":
+    app = AlumnoApp()
+    app.mainloop()
